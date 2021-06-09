@@ -37,9 +37,9 @@ type configSourceParserProvider struct {
 }
 
 // NewConfigSourceParserProvider creates a ParserProvider that uses config sources.
-func NewConfigSourceParserProvider(logger *zap.Logger, buildInfo component.BuildInfo, factories ...Factory) parserprovider.ParserProvider {
+func NewConfigSourceParserProvider(pp parserprovider.ParserProvider, logger *zap.Logger, buildInfo component.BuildInfo, factories ...Factory) parserprovider.ParserProvider {
 	return &configSourceParserProvider{
-		pp:        parserprovider.Default(),
+		pp:        pp,
 		logger:    logger,
 		factories: factories,
 		buildInfo: buildInfo,

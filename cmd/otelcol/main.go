@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/service"
+	"go.opentelemetry.io/collector/service/parserprovider"
 	"go.uber.org/zap"
 
 	"github.com/signalfx/splunk-otel-collector/internal/components"
@@ -37,6 +39,7 @@ import (
 const (
 	ballastEnvVarName     = "SPLUNK_BALLAST_SIZE_MIB"
 	configEnvVarName      = "SPLUNK_CONFIG"
+	configYamlEnvVarName  = "SPLUNK_CONFIG_YAML"
 	memLimitMiBEnvVarName = "SPLUNK_MEMORY_LIMIT_MIB"
 	memTotalEnvVarName    = "SPLUNK_MEMORY_TOTAL_MIB"
 	realmEnvVarName       = "SPLUNK_REALM"
@@ -56,8 +59,7 @@ func main() {
 	// TODO: Use same format as the collector
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	args := os.Args[1:]
-	if !contains(args, "-h") && !contains(args, "--help") {
+	if !contains(os.Args[1:], "-h") && !contains(os.Args[1:], "--help") {
 		checkRuntimeParams()
 	}
 
@@ -71,11 +73,18 @@ func main() {
 		Version: version.Version,
 	}
 
+	baseParserProvider := parserprovider.Default()
+	if configYAML := os.Getenv(configYamlEnvVarName); configYAML != "" {
+		baseParserProvider = parserprovider.NewInMemory(bytes.NewBufferString(configYAML))
+	}
+
 	parserProvider := configprovider.NewConfigSourceParserProvider(
+		baseParserProvider,
 		zap.NewNop(), // The service logger is not available yet, setting it to NoP.
 		info,
 		configsources.Get()...,
 	)
+
 	serviceParams := service.AppSettings{
 		BuildInfo:      info,
 		Factories:      factories,
@@ -124,16 +133,11 @@ func getKeyValue(args []string, argName string) string {
 // Config and ballast flags are checked
 // Config and all memory env vars are checked
 func checkRuntimeParams() {
-	args := os.Args[1:]
-	config := ""
-
 	// Check if config flag was passed and its value differs from config env var.
 	// If so, log that it will be used instead of env var value and set env var with that value.
 	// This allows users to set `--config` and have it take priority when running from most contexts.
-	cliConfig := getKeyValue(args, "--config")
-	if cliConfig != "" {
-		config = os.Getenv(configEnvVarName)
-		if config != "" && config != cliConfig {
+	if cliConfig := getKeyValue(os.Args[1:], "--config"); cliConfig != "" {
+		if config := os.Getenv(configEnvVarName); config != "" && config != cliConfig {
 			log.Printf(
 				"Both %v and '--config' were specified. Overriding %q environment variable value with %q for this session",
 				configEnvVarName, config, cliConfig,
@@ -141,7 +145,7 @@ func checkRuntimeParams() {
 		}
 		os.Setenv(configEnvVarName, cliConfig)
 	}
-	setConfig()
+	setConfigSource()
 
 	// Set default total memory
 	memTotalSizeMiB := defaultMemoryTotalMiB
@@ -164,10 +168,9 @@ func checkRuntimeParams() {
 	// Check if memory ballast flag was passed
 	// If so, ensure memory ballast env var is not set
 	// Then set memory ballast and limit properly
-	ballastSize := getKeyValue(args, "--mem-ballast-size-mib")
+	ballastSize := getKeyValue(os.Args[1:], "--mem-ballast-size-mib")
 	if ballastSize != "" {
-		config = os.Getenv(ballastEnvVarName)
-		if config != "" {
+		if os.Getenv(ballastEnvVarName) != "" {
 			log.Fatalf("Both %v and '--config' were specified, but only one is allowed", ballastEnvVarName)
 		}
 		os.Setenv(ballastEnvVarName, ballastSize)
@@ -177,31 +180,52 @@ func checkRuntimeParams() {
 }
 
 // Validate and set the configuration
-func setConfig() {
-	// Check if the config is specified via the env var.
-	config := os.Getenv(configEnvVarName)
-	// If not attempt to use a default config; supports Docker and local
-	if config == "" {
+func setConfigSource() {
+	// Config file path from cmd flag --config.
+	pathFlag := getKeyValue(os.Args[1:], "--config")
+	// Config file path from env var SPLUNK_CONFIG.
+	pathEnv := os.Getenv(configEnvVarName)
+	// Config YAML from env var SPLUNK_CONFIG_YAML.
+	cfgYAML := os.Getenv(configYamlEnvVarName)
+
+	// Halting if multiple config sources specified.
+	if (pathFlag != "" && pathEnv != "") || (pathFlag != "" && cfgYAML != "") || (pathEnv != "" && cfgYAML != "") {
+		log.Fatalf("'--config', %s and %s must be specified exclusively", configEnvVarName, configYamlEnvVarName)
+	}
+
+	if cfgYAML != "" {
+		log.Printf("Configuring collector using env var %s YAML", configYamlEnvVarName)
+		return
+	}
+
+	// Setting env var SPLUNK_CONFIG if flag config was passed.
+	if pathFlag != "" {
+		pathEnv = pathFlag
+		os.Setenv(configEnvVarName, pathEnv)
+	}
+
+	// Use a default config if no config given; supports Docker and local
+	if pathEnv == "" {
 		_, err := os.Stat(defaultDockerSAPMConfig)
 		if err == nil {
-			config = defaultDockerSAPMConfig
+			pathEnv = defaultDockerSAPMConfig
 		}
 		_, err = os.Stat(defaultLocalSAPMConfig)
 		if err == nil {
-			config = defaultLocalSAPMConfig
+			pathEnv = defaultLocalSAPMConfig
 		}
-		if config == "" {
+		if pathEnv == "" {
 			log.Fatalf("Unable to find the default configuration file, ensure %s environment variable is set properly", configEnvVarName)
 		}
 	} else {
 		// Check if file exists.
-		_, err := os.Stat(config)
+		_, err := os.Stat(pathEnv)
 		if err != nil {
-			log.Fatalf("Unable to find the configuration file (%s) ensure %s environment variable is set properly", config, configEnvVarName)
+			log.Fatalf("Unable to find the configuration file (%s) ensure %s environment variable is set properly", pathEnv, configEnvVarName)
 		}
 	}
 
-	switch config {
+	switch pathEnv {
 	case
 		defaultDockerSAPMConfig,
 		defaultDockerOTLPConfig,
@@ -213,17 +237,16 @@ func setConfig() {
 		for _, v := range requiredEnvVars {
 			if len(os.Getenv(v)) == 0 {
 				log.Printf("Usage: %s=12345 %s=us0 %s", tokenEnvVarName, realmEnvVarName, os.Args[0])
-				log.Fatalf("ERROR: Missing required environment variable %s with default config path %s", v, config)
+				log.Fatalf("ERROR: Missing required environment variable %s with default config path %s", v, pathEnv)
 			}
 		}
 	}
 
-	args := os.Args[1:]
-	if !contains(args, "--config") {
+	if !contains(os.Args[1:], "--config") {
 		// Inject the command line flag that controls the configuration.
-		os.Args = append(os.Args, "--config="+config)
+		os.Args = append(os.Args, "--config="+pathEnv)
 	}
-	log.Printf("Set config to %v", config)
+	log.Printf("Set config to %v", pathEnv)
 }
 
 // Validate and set the memory ballast

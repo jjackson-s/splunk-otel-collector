@@ -60,7 +60,7 @@ func TestGetKeyValue(t *testing.T) {
 func TestCheckRuntimeParams(*testing.T) {
 	oldArgs := os.Args
 	os.Setenv(configEnvVarName, "../../"+defaultLocalSAPMConfig)
-	setConfig()
+	setConfigSource()
 	os.Unsetenv(configEnvVarName)
 	checkRuntimeParams()
 
@@ -101,7 +101,7 @@ func TestUseConfigFromEnvVar(t *testing.T) {
 	os.Setenv(tokenEnvVarName, "12345")
 	os.Setenv(realmEnvVarName, "us0")
 	os.Setenv(configEnvVarName, "../../"+defaultLocalSAPMConfig)
-	setConfig()
+	setConfigSource()
 
 	args := os.Args[1:]
 	c := getKeyValue(args, "--config")
