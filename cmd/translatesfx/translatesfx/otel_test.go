@@ -52,6 +52,55 @@ func TestAPIURLToRealm(t *testing.T) {
 	assert.Equal(t, "us0", us0)
 }
 
+func TestDimsToMTP(t *testing.T) {
+	block := dimsToMetricsTransformProcessor(map[interface{}]interface{}{
+		"aaa": "bbb",
+		"ccc": "ddd",
+	})
+	transforms := block["transforms"].([]map[interface{}]interface{})
+	transform := transforms[0]
+	assert.Equal(t, ".*", transform["include"])
+	assert.Equal(t, "regexp", transform["match_type"])
+	assert.Equal(t, "update", transform["action"])
+	ops := transform["operations"].([]map[interface{}]interface{})
+	assert.Equal(t, 2, len(ops))
+	assert.Equal(t, map[interface{}]interface{}{
+		"action":    "add_label",
+		"new_label": "aaa",
+		"new_value": "bbb",
+	}, ops[0])
+	assert.Equal(t, map[interface{}]interface{}{
+		"action":    "add_label",
+		"new_label": "ccc",
+		"new_value": "ddd",
+	}, ops[1])
+}
+
+func TestMetricsTransform_NoGlobalDims(t *testing.T) {
+	simple := fromYAML(t, "testdata/sa-simple.yaml")
+	expanded, err := expandSA(simple, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	_, ok := oc.Processors["metricstransform"]
+	assert.False(t, ok)
+}
+
+func TestMetricsTransform_GlobalDims(t *testing.T) {
+	simple := fromYAML(t, "testdata/sa-complex.yaml")
+	expanded, err := expandSA(simple, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	_, ok := oc.Processors["metricstransform"]
+	assert.True(t, ok)
+	pipelines := oc.Service["pipelines"].(map[string]interface{})
+	metrics := pipelines["metrics"].(rpe)
+	assert.NotNil(t, metrics.Processors)
+}
+
 func testvSphereMonitorCfg() map[interface{}]interface{} {
 	return map[interface{}]interface{}{
 		"type":     "vsphere",
