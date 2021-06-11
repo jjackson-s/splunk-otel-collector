@@ -133,18 +133,6 @@ func getKeyValue(args []string, argName string) string {
 // Config and ballast flags are checked
 // Config and all memory env vars are checked
 func checkRuntimeParams() {
-	// Check if config flag was passed and its value differs from config env var.
-	// If so, log that it will be used instead of env var value and set env var with that value.
-	// This allows users to set `--config` and have it take priority when running from most contexts.
-	if cliConfig := getKeyValue(os.Args[1:], "--config"); cliConfig != "" {
-		if config := os.Getenv(configEnvVarName); config != "" && config != cliConfig {
-			log.Printf(
-				"Both %v and '--config' were specified. Overriding %q environment variable value with %q for this session",
-				configEnvVarName, config, cliConfig,
-			)
-		}
-		os.Setenv(configEnvVarName, cliConfig)
-	}
 	setConfigSource()
 
 	// Set default total memory
@@ -183,49 +171,53 @@ func checkRuntimeParams() {
 func setConfigSource() {
 	// Config file path from cmd flag --config.
 	pathFlag := getKeyValue(os.Args[1:], "--config")
-	// Config file path from env var SPLUNK_CONFIG.
-	pathEnv := os.Getenv(configEnvVarName)
-	// Config YAML from env var SPLUNK_CONFIG_YAML.
-	cfgYAML := os.Getenv(configYamlEnvVarName)
+	// Config file path from env var.
+	pathVar := os.Getenv(configEnvVarName)
+	// Config YAML from env var.
+	yamlVar := os.Getenv(configYamlEnvVarName)
 
-	// Halting if multiple config sources specified.
-	if (pathFlag != "" && pathEnv != "") || (pathFlag != "" && cfgYAML != "") || (pathEnv != "" && cfgYAML != "") {
-		log.Fatalf("'--config', %s and %s must be specified exclusively", configEnvVarName, configYamlEnvVarName)
-	}
-
-	if cfgYAML != "" {
-		log.Printf("Configuring collector using env var %s YAML", configYamlEnvVarName)
-		return
-	}
-
-	// Setting env var SPLUNK_CONFIG if flag config was passed.
-	if pathFlag != "" {
-		pathEnv = pathFlag
-		os.Setenv(configEnvVarName, pathEnv)
+	if pathFlag == "" {
+		// Restricting specifying config file path and config YAML env vars simultaneously.
+		if pathVar != "" && yamlVar != "" {
+			log.Fatalf("Specifying env vars %s and %s simultaneously is not allowed", configEnvVarName, configYamlEnvVarName)
+		}
+		if yamlVar != "" {
+			log.Printf("Configuring collector using YAML from env var %s", configYamlEnvVarName)
+			return
+		}
+	} else {
+		// Logging that the specified config file path flag takes precedence over differing config file path env var
+		// and setting the env var with the flag value.
+		// This allows users to set `--config` and have it take priority when running from most contexts.
+		if pathVar != "" && pathVar != pathFlag {
+			log.Printf("Both %v and '--config' were specified. Overriding %q environment variable value with %q for this session", configEnvVarName, pathVar, pathFlag)
+		}
+		pathVar = pathFlag
+		os.Setenv(configEnvVarName, pathVar)
 	}
 
 	// Use a default config if no config given; supports Docker and local
-	if pathEnv == "" {
+	if pathVar == "" {
 		_, err := os.Stat(defaultDockerSAPMConfig)
 		if err == nil {
-			pathEnv = defaultDockerSAPMConfig
+			pathVar = defaultDockerSAPMConfig
 		}
 		_, err = os.Stat(defaultLocalSAPMConfig)
 		if err == nil {
-			pathEnv = defaultLocalSAPMConfig
+			pathVar = defaultLocalSAPMConfig
 		}
-		if pathEnv == "" {
+		if pathVar == "" {
 			log.Fatalf("Unable to find the default configuration file, ensure %s environment variable is set properly", configEnvVarName)
 		}
 	} else {
 		// Check if file exists.
-		_, err := os.Stat(pathEnv)
+		_, err := os.Stat(pathVar)
 		if err != nil {
-			log.Fatalf("Unable to find the configuration file (%s) ensure %s environment variable is set properly", pathEnv, configEnvVarName)
+			log.Fatalf("Unable to find the configuration file (%s) ensure %s environment variable is set properly", pathVar, configEnvVarName)
 		}
 	}
 
-	switch pathEnv {
+	switch pathVar {
 	case
 		defaultDockerSAPMConfig,
 		defaultDockerOTLPConfig,
@@ -237,16 +229,16 @@ func setConfigSource() {
 		for _, v := range requiredEnvVars {
 			if len(os.Getenv(v)) == 0 {
 				log.Printf("Usage: %s=12345 %s=us0 %s", tokenEnvVarName, realmEnvVarName, os.Args[0])
-				log.Fatalf("ERROR: Missing required environment variable %s with default config path %s", v, pathEnv)
+				log.Fatalf("ERROR: Missing required environment variable %s with default config path %s", v, pathVar)
 			}
 		}
 	}
 
 	if !contains(os.Args[1:], "--config") {
 		// Inject the command line flag that controls the configuration.
-		os.Args = append(os.Args, "--config="+pathEnv)
+		os.Args = append(os.Args, "--config="+pathVar)
 	}
-	log.Printf("Set config to %v", pathEnv)
+	log.Printf("Set config to %v", pathVar)
 }
 
 // Validate and set the memory ballast
