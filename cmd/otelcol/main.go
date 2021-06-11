@@ -74,7 +74,7 @@ func main() {
 	}
 
 	baseParserProvider := parserprovider.Default()
-	if configYAML := os.Getenv(configYamlEnvVarName); configYAML != "" {
+	if configYAML := os.Getenv(configYamlEnvVarName); configYAML != "" && os.Getenv(configEnvVarName) == "" {
 		baseParserProvider = parserprovider.NewInMemory(bytes.NewBufferString(configYAML))
 	}
 
@@ -167,7 +167,7 @@ func checkRuntimeParams() {
 	setMemoryLimit(memTotalSizeMiB)
 }
 
-// Validate and set the configuration
+// Validate and equate specified config file path flag to the config file path env var
 func setConfigSource() {
 	// Config file path from cmd flag --config.
 	pathFlag := getKeyValue(os.Args[1:], "--config")
@@ -176,22 +176,27 @@ func setConfigSource() {
 	// Config YAML from env var.
 	yamlVar := os.Getenv(configYamlEnvVarName)
 
-	if pathFlag == "" {
-		// Restricting specifying config file path and config YAML env vars simultaneously.
-		if pathVar != "" && yamlVar != "" {
-			log.Fatalf("Specifying env vars %s and %s simultaneously is not allowed", configEnvVarName, configYamlEnvVarName)
-		}
+	// Restricting specifying config file path and config YAML env vars simultaneously.
+	if pathVar != "" && yamlVar != "" {
+		log.Fatalf("Specifying env vars %s and %s simultaneously is not allowed", configEnvVarName, configYamlEnvVarName)
+	}
+
+	if pathFlag == "" && yamlVar != "" {
+		log.Printf("Configuring collector using YAML from env var %s", configYamlEnvVarName)
+		return
+	}
+
+	// Config file path flag `--config` should take priority when running from most contexts.
+	if pathFlag != "" {
+		// Config file path flag takes precedence over config YAML env var.
 		if yamlVar != "" {
-			log.Printf("Configuring collector using YAML from env var %s", configYamlEnvVarName)
-			return
+			log.Printf("Both %v and '--config' were specified. Ignoring %q environment variable value and using configuration in %q", configYamlEnvVarName, yamlVar, pathFlag)
 		}
-	} else {
-		// Logging that the specified config file path flag takes precedence over differing config file path env var
-		// and setting the env var with the flag value.
-		// This allows users to set `--config` and have it take priority when running from most contexts.
+		// Config file path flag takes precedence over config file path env var.
 		if pathVar != "" && pathVar != pathFlag {
 			log.Printf("Both %v and '--config' were specified. Overriding %q environment variable value with %q for this session", configEnvVarName, pathVar, pathFlag)
 		}
+		// Setting the config file path env var to the config file path flag value.
 		pathVar = pathFlag
 		os.Setenv(configEnvVarName, pathVar)
 	}
