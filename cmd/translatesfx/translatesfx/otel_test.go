@@ -15,6 +15,7 @@
 package translatesfx
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,19 +45,127 @@ func TestMonitorToReceiver(t *testing.T) {
 	assert.Equal(t, "vsphere", m["type"])
 }
 
-func TestAPIURLToRealm(t *testing.T) {
-	us1, _ := apiURLToRealm("https://api.us1.signalfx.com")
-	assert.Equal(t, "us1", us1)
-
-	us0, _ := apiURLToRealm("https://api.signalfx.com")
-	assert.Equal(t, "us0", us0)
-}
-
 func testvSphereMonitorCfg() map[interface{}]interface{} {
 	return map[interface{}]interface{}{
 		"type":     "vsphere",
 		"host":     "localhost",
 		"username": "administrator",
 		"password": "abc123",
+	}
+}
+
+func TestAPIURLToRealm(t *testing.T) {
+	us0, _ := apiURLToRealm(map[interface{}]interface{}{
+		"apiUrl": "https://api.signalfx.com",
+	})
+	assert.Equal(t, "us0", us0)
+
+	us1, _ := apiURLToRealm(map[interface{}]interface{}{
+		"apiUrl": "https://api.us1.signalfx.com",
+	})
+	assert.Equal(t, "us1", us1)
+
+	us2, _ := apiURLToRealm(map[interface{}]interface{}{
+		"signalFxRealm": "us2",
+	})
+	assert.Equal(t, "us2", us2)
+}
+
+func TestMTOperations(t *testing.T) {
+	ops := mtOperations(map[interface{}]interface{}{
+		"d": "3",
+		"c": "2",
+		"b": "1",
+		"a": "0",
+	})
+	a := []string{"a", "b", "c", "d"}
+	for i, op := range ops {
+		assert.Equal(t, strconv.Itoa(i), op["new_value"])
+		assert.Equal(t, a[i], op["new_label"])
+	}
+}
+
+func TestDimsToMTP(t *testing.T) {
+	block := dimsToMetricsTransformProcessor(map[interface{}]interface{}{
+		"aaa": "bbb",
+		"ccc": "ddd",
+	})
+	transforms := block["transforms"].([]map[interface{}]interface{})
+	transform := transforms[0]
+	assert.Equal(t, ".*", transform["include"])
+	assert.Equal(t, "regexp", transform["match_type"])
+	assert.Equal(t, "update", transform["action"])
+	ops := transform["operations"].([]map[interface{}]interface{})
+	assert.Equal(t, 2, len(ops))
+	assert.Equal(t, map[interface{}]interface{}{
+		"action":    "add_label",
+		"new_label": "aaa",
+		"new_value": "bbb",
+	}, ops[0])
+	assert.Equal(t, map[interface{}]interface{}{
+		"action":    "add_label",
+		"new_label": "ccc",
+		"new_value": "ddd",
+	}, ops[1])
+}
+
+func TestMetricsTransform_NoGlobalDims(t *testing.T) {
+	cfg := fromYAML(t, "testdata/sa-simple.yaml")
+	expanded, err := expandSA(cfg, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	_, ok := oc.Processors["metricstransform"]
+	assert.False(t, ok)
+}
+
+func TestMetricsTransform_GlobalDims(t *testing.T) {
+	cfg := fromYAML(t, "testdata/sa-complex.yaml")
+	expanded, err := expandSA(cfg, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	_, ok := oc.Processors["metricstransform"]
+	assert.True(t, ok)
+	pipelines := oc.Service["pipelines"].(map[string]interface{})
+	metrics := pipelines["metrics"].(rpe)
+	assert.NotNil(t, metrics.Processors)
+}
+
+func TestMetricsTransform_CollectD(t *testing.T) {
+	cfg := fromYAML(t, "testdata/sa-collectd.yaml")
+	expanded, err := expandSA(cfg, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	v, ok := oc.Extensions["smartagent"]
+	require.True(t, ok)
+	saExt, ok := v.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 7, len(saExt))
+	v = saExt["collectd"]
+	collectd, ok := v.(map[interface{}]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 4, len(collectd))
+	v = oc.Service["extensions"]
+	serviceExt, ok := v.([]string)
+	require.True(t, ok)
+	assert.Equal(t, 1, len(serviceExt))
+}
+
+func TestMetricsTransform_DeleteDiscoverRules(t *testing.T) {
+	cfg := fromYAML(t, "testdata/sa-discoveryrules.yaml")
+	expanded, err := expandSA(cfg, "")
+	require.NoError(t, err)
+	info, err := saExpandedToCfgInfo(expanded)
+	require.NoError(t, err)
+	oc := saInfoToOtelConfig(info)
+	for k, v := range oc.Receivers {
+		receiver := v.(map[interface{}]interface{})
+		_, found := receiver["discoveryRule"]
+		assert.False(t, found, "discoveryRule not deleted for %s", k)
 	}
 }

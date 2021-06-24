@@ -14,9 +14,13 @@
 
 package translatesfx
 
+import "sort"
+
 type otelCfg struct {
+	Extensions    map[string]interface{} `yaml:",omitempty"`
 	ConfigSources map[string]interface{} `yaml:"config_sources"`
 	Receivers     map[string]interface{}
+	Processors    map[string]interface{} `yaml:",omitempty"`
 	Exporters     map[string]interface{}
 	Service       map[string]interface{}
 }
@@ -29,29 +33,43 @@ func saInfoToOtelConfig(cfg saCfgInfo) otelCfg {
 			receivers[k.(string)] = v
 		}
 	}
-	return otelCfg{
+	out := otelCfg{
 		ConfigSources: map[string]interface{}{
+			// TODO check if should be nil
 			"include": nil,
 		},
 		Receivers: receivers,
 		Exporters: sfxExporter(cfg.accessToken, cfg.realm),
-		Service: map[string]interface{}{
-			"pipelines": map[string]interface{}{
-				"metrics": rpe{
-					Receivers: receiverList(receivers),
-					Exporters: []string{"signalfx"},
-				},
-			},
+	}
+	rpe := rpe{
+		Receivers: receiverList(receivers),
+		Exporters: []string{"signalfx"},
+	}
+	if cfg.globalDims != nil {
+		const mt = "metricstransform"
+		out.Processors = map[string]interface{}{
+			mt: dimsToMetricsTransformProcessor(cfg.globalDims),
+		}
+		rpe.Processors = []string{mt}
+	}
+	out.Service = map[string]interface{}{
+		"pipelines": map[string]interface{}{
+			"metrics": rpe,
 		},
 	}
+	if len(cfg.saExtension) > 0 {
+		out.Extensions = cfg.saExtension
+		out.Service["extensions"] = []string{"smartagent"}
+	}
+	return out
 }
 
 // rpe == Receivers Processors Exporters. Using this instead of a map for
 // deterministic ordering.
 type rpe struct {
-	Receivers []string
-	// Processors field TBD
-	Exporters []string
+	Receivers  []string
+	Processors []string `yaml:",omitempty"`
+	Exporters  []string
 }
 
 func receiverList(receivers map[string]interface{}) []string {
@@ -63,6 +81,8 @@ func receiverList(receivers map[string]interface{}) []string {
 }
 
 func saMonitorToOtelReceiver(monitor map[interface{}]interface{}) map[interface{}]interface{} {
+	// TODO translate discovery rule (delete for now)
+	delete(monitor, "discoveryRule")
 	return map[interface{}]interface{}{
 		"smartagent/" + monitor["type"].(string): monitor,
 	}
@@ -75,4 +95,32 @@ func sfxExporter(accessToken, realm string) map[string]interface{} {
 			"realm":        realm,
 		},
 	}
+}
+
+func dimsToMetricsTransformProcessor(m map[interface{}]interface{}) map[interface{}]interface{} {
+	return map[interface{}]interface{}{
+		"transforms": []map[interface{}]interface{}{{
+			"include":    ".*",
+			"match_type": "regexp",
+			"action":     "update",
+			"operations": mtOperations(m),
+		}},
+	}
+}
+
+func mtOperations(m map[interface{}]interface{}) (out []map[interface{}]interface{}) {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k.(string))
+	}
+	// sorted for easier testing
+	sort.Strings(keys)
+	for _, k := range keys {
+		out = append(out, map[interface{}]interface{}{
+			"action":    "add_label",
+			"new_label": k,
+			"new_value": m[k],
+		})
+	}
+	return
 }

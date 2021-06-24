@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.28.1
+
+- Update bundled Smart Agent to [v5.11.0](https://github.com/signalfx/signalfx-agent/releases/tag/v5.11.0) (#487)
+- Document APM infra correlation (#458)
+- Alpha translatesfx feature additions.
+
 ## v0.28.0
 
 This Splunk OpenTelemetry Collector release includes changes from the [opentelemetry-collector v0.28.0](https://github.com/open-telemetry/opentelemetry-collector/releases/tag/v0.28.0) and the [opentelemetry-collector-contrib v0.28.0](https://github.com/open-telemetry/opentelemetry-collector-contrib/releases/tag/v0.28.0) releases.
